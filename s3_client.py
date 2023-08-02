@@ -12,6 +12,11 @@ from botocore.exceptions import ClientError
 from boto3.s3.transfer import TransferConfig
 
 
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s: %(levelname)s: %(message)s"
+)
+LOGGER = logging.getLogger()
+
 SUBCOMMANDS = {'ls', 'list', 'upload', 'rm', 'delete'}
 
 
@@ -20,6 +25,23 @@ def _firstSubcommand(argv):
         if argv[i] in SUBCOMMANDS:
             return i
     return len(argv)
+
+
+def format_size(size, si=False):
+    '''
+    Format file size in bytes to human readable format.
+    '''
+    divisor = 1000 if si else 1024.0
+    for i, unit in enumerate(("", "K", "M", "G", "T", "P")):
+        if i > 1:
+            size /= divisor
+        if abs(size) < divisor:
+            size_f = round(size, 1)
+            if size_f % 1 == 0 or size_f >= 100:
+                size_f = round(size)
+
+            return f"{size_f}{unit.lower() if si else unit}"
+    return f'{size:.0e}{"p" if si else "P"}'
 
 
 def upload_file(bucket, s3_client, file_name):
@@ -43,7 +65,7 @@ def upload_file(bucket, s3_client, file_name):
         response = s3_client.upload_file(file_name, bucket, file_name, Config=config)
 
     except ClientError as e:
-        sys.stderr.write(e)
+        LOGGER.error(e)
         sys.exit(1)
 
 
@@ -77,7 +99,7 @@ def list_files(bucket, s3_client, file_name=None):
             yield response['Contents']
 
     except ClientError as e:
-        sys.stderr.write(e)
+        LOGGER.error(e)
         sys.exit(1)
 
 
@@ -127,7 +149,7 @@ Available commands:
             debugger.set_trace()
 
         if not args.command in SUBCOMMANDS:
-            sys.stderr.write(f'ERROR: {args.command} is an unknown command!\n')
+            LOGGER.error(f'ERROR: {args.command} is an unknown command!\n')
             parser.print_help()
             sys.exit(1)
 
@@ -141,19 +163,22 @@ Available commands:
     def list(self, start=2):
         parser = argparse.ArgumentParser(description=Main.LIST_DESCRIPTION)
         parser.add_argument('-l', action='store_true', default=False, help='Use a long listing format.')
-        # parser.add_argument('-H', action='store_true', default=False,
-        #                     help='With -l, print file sizes in human readable format.')
+        parser.add_argument('--si', action='store_true', default=False,
+                            help='Print file sizes in powers of 1000, not 1024.')
+        parser.add_argument('-H', action='store_true', default=False,
+                            help='With -l, print file sizes in human readable format.')
         parser.add_argument('subdirectory', nargs='*',
                             help='Subdirectory/ies to list. If none, the entire contents of the bucket are listed.')
         args = parser.parse_args(sys.argv[start:])
 
-        # contents = [{'Key': 'hello.txt', 'LastModified': datetime(2023, 8, 2, 0, 14, 53), 'ETag': '"b1946ac92492d2347c6235b4d2611184"', 'Size': 6, 'StorageClass': 'STANDARD'},
-        #             {'Key': 'subdir/hello2.txt', 'LastModified': datetime(2023, 8, 2, 0, 16, 24), 'ETag': '"b1946ac92492d2347c6235b4d2611184"', 'Size': 6, 'StorageClass': 'STANDARD'}]
-
         for chunk in list_files(self.bucket, self.client):
             for file in chunk:
                 if args.l:
-                    sys.stdout.write(f'{file["Size"]}\t{file["LastModified"].strftime("%b %d %Y %H:%m")}\t')
+                    # convert file size to human readable format if necissary
+                    size = format_size(file["Size"], args.si) if args.H else file["Size"]
+                    # convert modified time to local timezone and format
+                    time = datetime.astimezone(file["LastModified"]).strftime("%b %d %Y %H:%m")
+                    sys.stdout.write(f'{size}\t{time}\t')
                 sys.stdout.write(f'{file["Key"]}\n')
 
 
@@ -163,15 +188,18 @@ Available commands:
 
     def upload(self, start=2):
         parser = argparse.ArgumentParser(description=Main.LIST_DESCRIPTION)
+        parser.add_argument('-v', '--verbose', action='store_true', default=False,
+                            help='Print verbose output.')
         parser.add_argument('files', nargs='+',
                             help='File(s) to upload')
         args = parser.parse_args(sys.argv[start:])
 
         for file in args.files:
-            logging.info(f'Uploading: "{file}"')
-            # upload_file(self.bucket, self.client, file)
-            sleep(1)
-            logging.info(f'Finished uploading "{file}"')
+            if args.verbose:
+                LOGGER.info(f'Uploading: "{file}"')
+            upload_file(self.bucket, self.client, file)
+            if args.verbose:
+                LOGGER.info(f'Finished uploading "{file}"')
 
 
 if __name__ == '__main__':
