@@ -6,8 +6,6 @@ from datetime import datetime
 import logging
 from functools import wraps
 
-from time import sleep
-
 from boto3 import client
 from botocore.exceptions import ClientError
 from boto3.s3.transfer import TransferConfig
@@ -55,14 +53,13 @@ def format_size(size, si=False):
             size_f = round(size, 1)
             if size_f % 1 == 0 or size_f >= 100:
                 size_f = round(size)
-
             return f"{size_f}{unit.lower() if si else unit}"
     return f'{size:.0e}{"p" if si else "P"}'
 
 
 def s3_client_function(f):
     '''
-    Wraps files that use the boto client in a try block to catch boto3.ClientError
+    Wraps files that use the boto3 client in a try block to catch boto3.ClientError exception
     '''
     @wraps(f)
     def try_block(*args, **kwargs):
@@ -242,9 +239,9 @@ class Main(object):
                                          usage = f'''PDC_client -b <bucket_name> -k <access_key> -s <secret_key> <subcommand> [<options>]
 
 Available commands:
-   list     {Main.LIST_DESCRIPTION}
-   upload   {Main.UPLOAD_DESCRIPTION}
-   delete   {Main.DELETE_DESCRIPTION}''')
+   ls/list      {Main.LIST_DESCRIPTION}
+   put/upload   {Main.UPLOAD_DESCRIPTION}
+   rm/delete    {Main.DELETE_DESCRIPTION}''')
         parser.add_argument('--debug', choices = ['pdb', 'pudb'], default=None,
                             help='Start the main method in selected debugger')
         parser.add_argument('-b', '--bucket', required=True, help='s3 bucket name.')
@@ -317,7 +314,7 @@ Available commands:
                             help="Overite file if it already exists.")
         parser.add_argument('files', nargs='+',
                             help='File(s) to upload')
-        parser.add_argument('location', help='File(s) to upload')
+        parser.add_argument('directory', help='Directory on bucket to upload to.')
         args = parser.parse_args(sys.argv[subcommand_start:])
 
         for file in args.files:
@@ -326,7 +323,8 @@ Available commands:
             if not args.force and file_exists(self.bucket, self.client, file):
                 LOGGER.error(f'"{file}" already exists on bucket. Use --force to override.')
                 sys.exit(1)
-            upload_file(self.bucket, self.client, file)
+            upload_file(self.bucket, self.client, file,
+                        location=f'{args.directory.rstrip("/")}/{os.path.basename(file)}')
             if args.verbose:
                 LOGGER.info(f'Finished uploading "{file}"')
 
