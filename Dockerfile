@@ -2,6 +2,9 @@ from python:3.9-slim
 
 MAINTAINER "Aaron Maurais -- MacCoss Lab"
 
+RUN apt-get update && \
+    apt-get -y install procps
+
 RUN mkdir -p /code/s3_client
 
 # install python dependencies
