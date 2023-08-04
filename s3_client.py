@@ -47,7 +47,7 @@ def format_size(size, si=False):
     '''
     divisor = 1000 if si else 1024.0
     for i, unit in enumerate(("", "K", "M", "G", "T", "P")):
-        if i > 1:
+        if i > 0:
             size /= divisor
         if abs(size) < divisor:
             size_f = round(size, 1)
@@ -244,9 +244,9 @@ Available commands:
    rm/delete    {Main.DELETE_DESCRIPTION}''')
         parser.add_argument('--debug', choices = ['pdb', 'pudb'], default=None,
                             help='Start the main method in selected debugger')
-        parser.add_argument('-b', '--bucket', required=True, help='s3 bucket name.')
-        parser.add_argument('-k', '--accessKey', required=True, help='AWS access key.')
-        parser.add_argument('-s', '--secretAccessKey', required=True, help='AWS secret access key.')
+        parser.add_argument('-b', '--bucket', type=str, required=True, help='s3 bucket name.')
+        parser.add_argument('-k', '--accessKey', type=str, required=True, help='AWS access key.')
+        parser.add_argument('-s', '--secretAccessKey', type=str, required=True, help='AWS secret access key.')
         parser.add_argument('command', help = 'Subcommand to run.')
         subcommand_start = _firstSubcommand(sys.argv)
         args = parser.parse_args(sys.argv[1:(subcommand_start + 1)])
