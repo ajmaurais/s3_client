@@ -1,7 +1,7 @@
 
 import argparse
 import sys
-import os
+from os.path import basename
 from datetime import datetime
 import logging
 from functools import wraps
@@ -103,7 +103,7 @@ def file_exists(bucket, s3_client, file_path):
 
 
 @s3_client_function
-def upload_file(bucket, s3_client, file_to_upload, location=None):
+def upload_file(bucket, s3_client, file_to_upload, location):
     '''
     Upload a file to an S3 bucket
 
@@ -113,10 +113,12 @@ def upload_file(bucket, s3_client, file_to_upload, location=None):
         Name of bucket to upload to
     s3_client: boto3.client
         Initialized client object
+    location: str
+        The directory on s3 to upload to
     file_name: str
         File to upload
     '''
-    _location = file_to_upload if location is None else location
+    _location = f'{location.rstrip("/")}/{basename(file_to_upload)}'
     GB = 1024 ** 3
     config=TransferConfig(multipart_threshold=5*GB)
     response = s3_client.upload_file(file_to_upload, bucket, _location, Config=config)
@@ -320,11 +322,11 @@ Available commands:
         for file in args.files:
             if args.verbose:
                 LOGGER.info(f'Uploading: "{file}"')
-            if not args.force and file_exists(self.bucket, self.client, file):
-                LOGGER.error(f'"{file}" already exists on bucket. Use --force to override.')
-                sys.exit(1)
-            upload_file(self.bucket, self.client, file,
-                        location=f'{args.directory.rstrip("/")}/{os.path.basename(file)}')
+            if not args.force and file_exists(self.bucket, self.client, f'{args.directory.rstrip("/")}/{basename(file)}'):
+                LOGGER.info(f'"{file}" already exists on bucket. Skipping...')
+                continue
+
+            upload_file(self.bucket, self.client, file, args.directory)
             if args.verbose:
                 LOGGER.info(f'Finished uploading "{file}"')
 
