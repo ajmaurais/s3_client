@@ -5,6 +5,7 @@ from os.path import basename
 from datetime import datetime
 import logging
 from functools import wraps
+# from multiprocessing import Pool
 
 from boto3 import client
 from botocore.exceptions import ClientError
@@ -155,6 +156,53 @@ def list_files(bucket, s3_client, prefix=None):
         response = s3_client.list_objects_v2(Bucket=bucket, **kwargs)
         yield response['Contents']
 
+@s3_client_function
+def list_files_depth(bucket, s3_client, max_depth=None, prefix='/'):
+    '''
+    List file(s) in an s3 bucket to a specific depth.
+
+    Parameters
+    ----------
+    bucket: str
+        Name of bucket to upload to
+    s3_client: boto3.client
+        Initialized client object
+    max_depth: int
+        Directory depth to list to. Default is 1.
+    prefix: str
+        Only files with the prefix will be returned.
+
+    Returns
+    -------
+    A generator to a list of files.
+    '''
+
+    def list_directory(prefix, current_depth):
+        paginator = s3_client.get_paginator('list_objects_v2')
+        for response in paginator.paginate(Bucket=bucket, Delimiter='/', Prefix=prefix):
+
+            # process files
+            files = []
+            if 'Contents' in response:
+                files = response['Contents']
+
+            # process subdirectories
+            directories = []
+            if 'CommonPrefixes' in response:
+                directories = [d['Prefix'] for d in response['CommonPrefixes']]
+            
+            # [{'Key': d, 'Size': 0, 'IsDirectory': True} for d in directories]
+
+            if len(files) > 0:
+                yield files
+
+            for directory in directories:
+                yield [{'Key': directory, 'Size': 0, 'IsDirectory': True}]
+                if max_depth is None or current_depth < max_depth:
+                    yield from list_directory(f'/{directory.strip("/")}/', current_depth + 1)
+            
+    yield from list_directory(prefix, 0)
+
 
 @s3_client_function
 def list_versions(bucket, s3_client, file_name=None):
@@ -279,28 +327,45 @@ Available commands:
                             help='Print file sizes in powers of 1000, not 1024.')
         parser.add_argument('-H', action='store_true', default=False,
                             help='With -l, print file sizes in human readable format.')
-        parser.add_argument('--versions', action='store_true', default=False, help='Also print file versions.')
+        parser.add_argument('-t', '--fileType', default='both', choices=['f', 'd', 'fd'],
+                            help='File type to list. "fd" is the default.')
+        parser.add_argument('-d', '--maxDepth', default=None, type=int,
+                            help='Maximum directory depth to list when using --recursive option.')
+        parser.add_argument('-r', '--recursive', default=False, action='store_true',
+                            help='Recursively list files.')
+        # parser.add_argument('--versions', action='store_true', default=False, help='Also print file versions.')
         parser.add_argument('prefix', nargs='*',
                             help='Subdirectory/ies to list. If none, the entire contents of the bucket are listed.')
         args = parser.parse_args(sys.argv[subcommand_start:])
 
-        list_dirs = args.prefix if len(args.prefix) >= 1 else (None,)
+        list_dirs = args.prefix if len(args.prefix) >= 1 else ('/',)
+        
+        max_depth = args.maxDepth if args.recursive else 1
         
         for d in list_dirs:
             if len(list_dirs) > 1:
                 sys.stdout.write(f'{d}:\n')
 
-            list_f = list_versions if args.versions else list_files
-            for chunk in list_f(self.bucket, self.client, d):
+            # list_f = list_versions if args.versions else list_files
+            for chunk in list_files_depth(self.bucket, self.client, max_depth, d.rstrip('/') + '/'):
                 for file in chunk:
                     if args.l:
+                        if 'IsDirectory' in file:
+                            time = '\t\t'
+                            if args.fileType == 'f':
+                                continue
+                        else:
+                            # convert last modified time to local timezone and format
+                            time = datetime.astimezone(file["LastModified"]).strftime("%b %d %Y %H:%m")
+                            if args.fileType == 'd':
+                                continue
+
                         # convert file size to human readable format if necissary
                         size = format_size(file["Size"], args.si) if args.H else file["Size"]
-                        # convert modified time to local timezone and format
-                        time = datetime.astimezone(file["LastModified"]).strftime("%b %d %Y %H:%m")
+
                         sys.stdout.write(f'{size}\t{time}\t')
-                    if args.versions:
-                        sys.stdout.write(f'{file["VersionId"]}\t')
+                    # if args.versions:
+                    #     sys.stdout.write(f'{file["VersionId"]}\t')
                     sys.stdout.write(f'{file["Key"]}\n')
 
 
@@ -310,24 +375,29 @@ Available commands:
 
     def upload(self, subcommand_start):
         parser = argparse.ArgumentParser(description=Main.LIST_DESCRIPTION)
-        parser.add_argument('-v', '--verbose', action='store_true', default=False,
-                            help='Print verbose output.')
+        parser.add_argument('-q', '--quiet', action='store_true', default=False,
+                            help='Less verbose output.')
         parser.add_argument('-f', '--force', action='store_true', default=False,
                             help="Overite file if it already exists.")
+        parser.add_argument('--threads', type=int, default=1,
+                            help='Number of files to upload in parallel.')
         parser.add_argument('files', nargs='+',
                             help='File(s) to upload')
         parser.add_argument('directory', help='Directory on bucket to upload to.')
         args = parser.parse_args(sys.argv[subcommand_start:])
 
+        # with Pool(processes=min(args.threads, len(args.files)):
         for file in args.files:
-            if args.verbose:
-                LOGGER.info(f'Uploading: "{file}"')
-            if not args.force and file_exists(self.bucket, self.client, f'{args.directory.rstrip("/")}/{basename(file)}'):
-                LOGGER.info(f'"{file}" already exists on bucket. Skipping...')
+            this_file_exists = file_exists(self.bucket, self.client, f'{args.directory.rstrip("/")}/{basename(file)}')
+            if not args.quiet:
+                LOGGER.info(f'{"Overwriting" if this_file_exists else "Uploading"}: "{file}"')
+            if not args.force:
+                if not argv.quiet:
+                    LOGGER.info(f'"{file}" already exists on bucket. Skipping...')
                 continue
 
             upload_file(self.bucket, self.client, file, args.directory)
-            if args.verbose:
+            if not args.quiet:
                 LOGGER.info(f'Finished uploading "{file}"')
 
 
@@ -337,8 +407,8 @@ Available commands:
 
     def delete(self, subcommand_start):
         parser = argparse.ArgumentParser(description=Main.DELETE_DESCRIPTION)
-        parser.add_argument('-v', '--verbose', action='store_true', default=False,
-                            help='Print verbose output.')
+        parser.add_argument('-q', '--quiet', action='store_true', default=False,
+                            help='Less verbose output.')
         parser.add_argument('-f', '--force', action='store_true', default=False,
                             help='Ignore nonexistent files.')
         parser.add_argument('files', nargs='+',
@@ -346,7 +416,7 @@ Available commands:
         args = parser.parse_args(sys.argv[subcommand_start:])
 
         for response in delete_files(self.bucket, self.client, args.files, verbose=True):
-            if args.verbose:
+            if not args.quiet:
                 for file in response['Deleted']:
                     key = file['Key']
                     LOGGER.info(f'Deleted "{key}"')
@@ -364,7 +434,28 @@ Available commands:
 
 
     def download(self, subcommand_start):
-        raise RuntimeError('Sorry, not yet implemented.')
+        parser = argparse.ArgumentParser(description=Main.DELETE_DESCRIPTION)
+        parser.add_argument('-q', '--quiet', action='store_true', default=False,
+                            help='Less verbose output.')
+        parser.add_argument('-f', '--force', action='store_true', default=False,
+                            help='Overwrite files at destination.')
+        parser.add_argument('files', nargs='+',
+                            help='Remote files to download.')
+        args = parser.parse_args(sys.argv[subcommand_start:])
+
+        for file in args.files:
+            pass
+            # if not args.quiet:
+            #     for file in response['Deleted']:
+            #         key = file['Key']
+            #         LOGGER.info(f'Deleted "{key}"')
+            # if 'Errors' in response:
+            #     LOGGER.error(f'There were {len(response["Errors"])} errors deleteing files in this chunk!')
+            #     for error in response['Errors']:
+            #         LOGGER.error(f'{error["Message"]}')
+            #         if response['Error']['Code'] == 'NoSuchKey' and args.force:
+            #             continue
+            #         sys.exit(1)
 
 
     def get(self, subcommand_start):
