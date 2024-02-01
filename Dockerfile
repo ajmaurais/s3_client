@@ -8,7 +8,7 @@ RUN apt-get update && \
 RUN mkdir -p /code/s3_client
 
 # install python dependencies
-RUN pip install boto3
+RUN pip install boto3 tqdm
 
 COPY s3_client.py /code/s3_client/s3_client.py
 

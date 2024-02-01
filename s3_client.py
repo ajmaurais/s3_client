@@ -1,7 +1,7 @@
 
 import argparse
 import sys
-from os.path import basename
+from os.path import basename, isdir, isfile, dirname
 from datetime import datetime
 import logging
 from functools import wraps
@@ -10,6 +10,7 @@ from functools import wraps
 from boto3 import client
 from botocore.exceptions import ClientError
 from boto3.s3.transfer import TransferConfig
+from tqdm import tqdm
 
 
 logging.basicConfig(
@@ -40,7 +41,7 @@ def format_size(size, si=False):
         Size of the file in bytes
     si: bool
         If True, use base 1000 instead of 1024
-    
+
     Returns
     -------
     formated_size: str
@@ -143,7 +144,7 @@ def list_files(bucket, s3_client, prefix=None):
     -------
     A generator to a list of files.
     '''
-    
+
     kwargs = dict()
     if prefix:
         kwargs['Prefix'] = prefix
@@ -190,8 +191,6 @@ def list_files_depth(bucket, s3_client, max_depth=None, prefix='/'):
             directories = []
             if 'CommonPrefixes' in response:
                 directories = [d['Prefix'] for d in response['CommonPrefixes']]
-            
-            # [{'Key': d, 'Size': 0, 'IsDirectory': True} for d in directories]
 
             if len(files) > 0:
                 yield files
@@ -200,7 +199,7 @@ def list_files_depth(bucket, s3_client, max_depth=None, prefix='/'):
                 yield [{'Key': directory, 'Size': 0, 'IsDirectory': True}]
                 if max_depth is None or current_depth < max_depth:
                     yield from list_directory(f'/{directory.strip("/")}/', current_depth + 1)
-            
+
     yield from list_directory(prefix, 0)
 
 
@@ -222,7 +221,7 @@ def list_versions(bucket, s3_client, file_name=None):
     -------
     A generator to a list of file versions.
     '''
-    
+
     kwargs = dict()
     if file_name:
         kwargs['Prefix'] = file_name
@@ -272,6 +271,25 @@ def delete_files(bucket, s3_client, files, files_per_request=1000, verbose=False
         response = s3_client.delete_objects(Bucket=bucket, Delete={'Objects':chunk})
         if verbose:
             yield response
+
+
+def get_file(bucket, s3_client, s3_file, local_file):
+    try:
+
+        # s3_client.download_file(bucket, s3_file, local_file)
+
+        file_size = s3_client.head_object(Bucket=bucket, Key=s3_file)['ContentLength']
+
+        # Download the file with progress monitoring
+        with tqdm(total=file_size, unit='B', unit_scale=True, desc='Downloading', leave=False) as pbar:
+            s3_client.download_file(bucket, s3_file, local_file, Callback=pbar.update)
+
+        LOGGER.info(f"\nFile downloaded successfully: {local_file}")
+        return True
+
+    except (ClientError, FileNotFoundError) as e:
+        LOGGER.error(str(e))
+        return False
 
 
 class Main(object):
@@ -339,9 +357,9 @@ Available commands:
         args = parser.parse_args(sys.argv[subcommand_start:])
 
         list_dirs = args.prefix if len(args.prefix) >= 1 else ('/',)
-        
+
         max_depth = args.maxDepth if args.recursive else 1
-        
+
         for d in list_dirs:
             if len(list_dirs) > 1:
                 sys.stdout.write(f'{d}:\n')
@@ -370,7 +388,7 @@ Available commands:
 
 
     def ls(self, subcommand_start):
-        self.list(subcommand_start) 
+        self.list(subcommand_start)
 
 
     def upload(self, subcommand_start):
@@ -428,7 +446,7 @@ Available commands:
                         continue
                     sys.exit(1)
 
-    
+
     def rm(self, subcommand_start):
         self.delete(subcommand_start)
 
@@ -439,23 +457,22 @@ Available commands:
                             help='Less verbose output.')
         parser.add_argument('-f', '--force', action='store_true', default=False,
                             help='Overwrite files at destination.')
-        parser.add_argument('files', nargs='+',
-                            help='Remote files to download.')
+        parser.add_argument('file', help='Remote file to download.')
+        parser.add_argument('dest', nargs='?', default=None, help='destination')
         args = parser.parse_args(sys.argv[subcommand_start:])
 
-        for file in args.files:
-            pass
-            # if not args.quiet:
-            #     for file in response['Deleted']:
-            #         key = file['Key']
-            #         LOGGER.info(f'Deleted "{key}"')
-            # if 'Errors' in response:
-            #     LOGGER.error(f'There were {len(response["Errors"])} errors deleteing files in this chunk!')
-            #     for error in response['Errors']:
-            #         LOGGER.error(f'{error["Message"]}')
-            #         if response['Error']['Code'] == 'NoSuchKey' and args.force:
-            #             continue
-            #         sys.exit(1)
+        dest = None
+        if args.dest is None:
+            dest = basename(args.file)
+        elif not isdir(args.dest) or not isdir(dirname(args.dest)):
+            LOGGER.error(f'Target file: "{args.dest}" could not be created!')
+            sys.exit(1)
+        elif isdir(args.dest):
+            dest = f'{args.dest}/{basename(args.file)}'
+        else:
+            dest = args.dest
+
+        get_file(self.bucket, self.client, args.file, dest)
 
 
     def get(self, subcommand_start):
