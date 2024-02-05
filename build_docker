@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+
+import sys
+import os
+import argparse
+import subprocess
+
+
+REPO_HEAD_DIR = os.path.dirname(os.path.abspath(__file__))
+DOCKER_IMAGE_NAME = 'mauraisa/s3_client'
+
+
+def get_git_info(cwd=None):
+
+    result = subprocess.run(['git', 'status', '--porcelain'],
+                            capture_output=True, cwd=cwd, check=True)
+    is_dirty  = result.stdout.decode('utf-8').strip() != ''
+
+    result = subprocess.run(['git', 'log', '-1', '--format=%cd', '--date=local'],
+                            capture_output=True, cwd=cwd, check=True)
+    git_date = result.stdout.decode('utf-8').strip()
+
+    result = subprocess.run(['git', 'rev-parse', '--verify', 'HEAD'],
+                            capture_output=True, cwd=cwd, check=True)
+    git_hash = result.stdout.decode('utf-8').strip()
+
+    return {'hash': git_hash,
+            'last_commit': git_date,
+            'uncommitted_changes': is_dirty}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=f'Build {DOCKER_IMAGE_NAME} docker image from {REPO_HEAD_DIR}')
+    parser.add_argument('-t', '--tag', type=str, default=None, help='Docker image tag')
+    args = parser.parse_args()
+
+    git_info = get_git_info(cwd=REPO_HEAD_DIR)
+
+    docker_command = ['docker', 'build', '-t', DOCKER_IMAGE_NAME]
+    if args.tag:
+        docker_command[-1] += f':{args.tag}'
+
+    for key, value in git_info.items():
+        docker_command.append('--build-arg')
+        docker_command.append(f"GIT_{key.upper()}={value}")
+
+    docker_command.append('--build-arg')
+    docker_command.append(f"GIT_SHORT_HASH={git_info['hash'][:8]}")
+
+    docker_command.append('--build-arg')
+    docker_command.append(f'DOCKER_TAG={args.tag}')
+
+    docker_command.append(REPO_HEAD_DIR)
+
+    sys.stdout.write(f"{' '.join(docker_command)}\n")
+    result = subprocess.run(docker_command, cwd=REPO_HEAD_DIR, shell=False, check=False)
+    sys.exit(result.returncode)
+
+
+if __name__ == '__main__':
+    main()

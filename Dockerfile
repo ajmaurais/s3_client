@@ -18,6 +18,19 @@ RUN cd /usr/local/bin && \
     echo '#!/usr/bin/env bash\nset -e\nexec "$@"' > entrypoint && \
     chmod 755 s3_client entrypoint
 
+# Git version information
+ARG GIT_HASH
+ARG GIT_SHORT_HASH
+ARG GIT_UNCOMMITTED_CHANGES
+ARG GIT_LAST_COMMIT
+ARG DOCKER_TAG
+
+ENV GIT_HASH=${GIT_HASH}
+ENV GIT_SHORT_HASH=${GIT_SHORT_HASH}
+ENV GIT_UNCOMMITTED_CHANGES=${GIT_UNCOMMITTED_CHANGES}
+ENV GIT_LAST_COMMIT=${GIT_LAST_COMMIT}
+ENV DOCKER_TAG=${DOCKER_TAG}
+
 WORKDIR /data
 
 CMD []
