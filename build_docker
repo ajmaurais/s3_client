@@ -4,6 +4,7 @@ import sys
 import os
 import argparse
 import subprocess
+import re
 
 
 REPO_HEAD_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -24,9 +25,32 @@ def get_git_info(cwd=None):
                             capture_output=True, cwd=cwd, check=True)
     git_hash = result.stdout.decode('utf-8').strip()
 
+    # parse branch name
+    result = subprocess.run(['git', 'branch'],
+                            capture_output=True, cwd=cwd, check=True)
+    git_branches = [x.strip() for x in result.stdout.decode('utf-8').strip().split('\n')]
+    git_branch = None
+    for branch in git_branches:
+        if branch[0] == '*':
+            git_branch = branch[1:].strip()
+            break
+
+    # parse repo url
+    result = subprocess.run(['git', 'remote', '-v'],
+                            capture_output=True, cwd=cwd, check=True)
+    repos = [re.split(r'\s+', x.strip()) for x in result.stdout.decode('utf-8').strip().split('\n')]
+    repo = None
+    for r in repos:
+        if len(r) >= 3:
+            if r[0] == 'origin' and r[2] == '(fetch)':
+                repo = r[1]
+                break
+
     return {'hash': git_hash,
             'last_commit': git_date,
-            'uncommitted_changes': is_dirty}
+            'uncommitted_changes': is_dirty,
+            'branch': git_branch,
+            'repo': repo}
 
 
 def main():
@@ -41,11 +65,15 @@ def main():
         docker_command[-1] += f':{args.tag}'
 
     for key, value in git_info.items():
-        docker_command.append('--build-arg')
-        docker_command.append(f"GIT_{key.upper()}={value}")
+        if value is not None:
+            docker_command.append('--build-arg')
+            docker_command.append(f"GIT_{key.upper()}={value}")
 
     docker_command.append('--build-arg')
     docker_command.append(f"GIT_SHORT_HASH={git_info['hash'][:8]}")
+
+    docker_command.append('--build-arg')
+    docker_command.append(f'DOCKER_IMAGE={DOCKER_IMAGE_NAME}')
 
     docker_command.append('--build-arg')
     docker_command.append(f'DOCKER_TAG={args.tag}')
