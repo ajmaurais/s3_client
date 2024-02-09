@@ -300,6 +300,7 @@ class Main(object):
 
     LIST_DESCRIPTION = 'List files in bucket or subdirectory.'
     UPLOAD_DESCRIPTION = 'Upload file(s).'
+    DOWNLOAD_DESCRIPTION = 'Download file(s).'
     DELETE_DESCRIPTION = 'Delete file(s).'
 
     def __init__(self):
@@ -309,6 +310,7 @@ class Main(object):
 Available commands:
    ls/list      {Main.LIST_DESCRIPTION}
    put/upload   {Main.UPLOAD_DESCRIPTION}
+   get/download {Main.DOWNLOAD_DESCRIPTION}
    rm/delete    {Main.DELETE_DESCRIPTION}''')
         parser.add_argument('--debug', choices = ['pdb', 'pudb'], default=None,
                             help='Start the main method in selected debugger')
