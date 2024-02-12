@@ -90,7 +90,7 @@ def file_exists(bucket, s3_client, file_path):
 
     Returns
     -------
-    file_exists: boo
+    file_exists: bool
     '''
     kwargs = {'Prefix': file_path}
     response = s3_client.list_objects_v2(Bucket=bucket, **kwargs)
@@ -102,6 +102,7 @@ def file_exists(bucket, s3_client, file_path):
         response = s3_client.list_objects_v2(Bucket=bucket, **kwargs)
         if file_path in [x for x in [file['Key'] for file in response['Contents']]]:
             return True
+    return False
 
 
 @s3_client_function
@@ -408,12 +409,13 @@ Available commands:
 
         # with Pool(processes=min(args.threads, len(args.files)):
         for file in args.files:
-            this_file_exists = file_exists(self.bucket, self.client, f'{args.directory.rstrip("/")}/{basename(file)}')
+            remote_path = f'{args.directory.rstrip("/")}/{basename(file)}'
+            this_file_exists = file_exists(self.bucket, self.client, remote_path)
             if not args.quiet:
                 LOGGER.info(f'{"Overwriting" if this_file_exists else "Uploading"}: "{file}"')
-            if not args.force:
-                if not argv.quiet:
-                    LOGGER.info(f'"{file}" already exists on bucket. Skipping...')
+            if this_file_exists and not args.force:
+                if not args.quiet:
+                    LOGGER.info(f'"{remote_path}" already exists on bucket. Skipping...')
                 continue
 
             upload_file(self.bucket, self.client, file, args.directory)
