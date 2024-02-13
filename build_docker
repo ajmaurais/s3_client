@@ -8,7 +8,7 @@ import re
 
 
 REPO_HEAD_DIR = os.path.dirname(os.path.abspath(__file__))
-DOCKER_IMAGE_NAME = 'mauraisa/s3_client'
+DOCKER_IMAGE_NAME = 'quay.io/mauraisa/s3_client'
 
 
 def get_git_info(cwd=None):
