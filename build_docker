@@ -12,6 +12,18 @@ DOCKER_IMAGE_NAME = 'quay.io/mauraisa/s3_client'
 
 
 def get_git_info(cwd=None):
+    '''
+    Get information about a git repository status.
+
+    Parameters
+    ----------
+    cwd: str
+        The git repo working directory.
+
+    Returns
+    -------
+    dict
+    '''
 
     result = subprocess.run(['git', 'status', '--porcelain'],
                             capture_output=True, cwd=cwd, check=True)

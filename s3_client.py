@@ -1,7 +1,7 @@
 
 import argparse
 import sys
-from os.path import basename, isdir, isfile, dirname
+import os
 from datetime import datetime
 import logging
 from functools import wraps
@@ -18,7 +18,7 @@ logging.basicConfig(
 )
 LOGGER = logging.getLogger()
 
-SUBCOMMANDS = {'ls', 'list', 'put', 'upload', 'get', 'download', 'rm', 'delete'}
+SUBCOMMANDS = {'ls', 'list', 'put', 'upload', 'get', 'download', 'rm', 'delete', 'mv', 'move'}
 
 
 def _firstSubcommand(argv):
@@ -106,7 +106,7 @@ def file_exists(bucket, s3_client, file_path):
 
 
 @s3_client_function
-def upload_file(bucket, s3_client, file_to_upload, location):
+def upload_file(bucket, s3_client, file_to_upload, location, quiet=False):
     '''
     Upload a file to an S3 bucket
 
@@ -121,10 +121,42 @@ def upload_file(bucket, s3_client, file_to_upload, location):
     file_name: str
         File to upload
     '''
-    _location = f'{location.rstrip("/")}/{basename(file_to_upload)}'
+    _location = f'{location.rstrip("/")}/{os.path.basename(file_to_upload)}'
     GB = 1024 ** 3
     config=TransferConfig(multipart_threshold=5*GB)
-    response = s3_client.upload_file(file_to_upload, bucket, _location, Config=config)
+
+    file_size = os.stat(file_to_upload).st_size
+
+    if quiet:
+        s3_client.upload_file(file_to_upload, bucket, _location, Config=config)
+    else:
+        with tqdm(total=file_size, unit='B', unit_scale=True, desc='Downloading', leave=False) as pbar:
+            s3_client.upload_file(file_to_upload, bucket, _location,
+                                  Config=config, Callback=pbar.update)
+
+
+@s3_client_function
+def rename(bucket, s3_client, source_key, dest_key, verbose=True):
+    '''
+    Move file matching source_key to dest_key
+    '''
+
+    if source_key == dest_key:
+        LOGGER.error('Source and destination are the same file!')
+        return False
+
+    copy_source = {'Bucket': bucket, 'Key': source_key}
+    s3_client.copy(copy_source, bucket, dest_key)
+    if file_exists(bucket, s3_client, dest_key):
+        if verbose:
+            LOGGER.info(f'{source_key} -> {dest_key}')
+        s3_client.delete_object(Bucket=bucket, Key=source_key)
+        if verbose:
+            LOGGER.info(f'Deleted {source_key}')
+        return True
+    else:
+        LOGGER.error('Failed to move {source_key} -> {dest_key}')
+        return False
 
 
 @s3_client_function
@@ -157,6 +189,7 @@ def list_files(bucket, s3_client, prefix=None):
         kwargs['ContinuationToken'] = response['NextContinuationToken']
         response = s3_client.list_objects_v2(Bucket=bucket, **kwargs)
         yield response['Contents']
+
 
 @s3_client_function
 def list_files_depth(bucket, s3_client, max_depth=None, prefix='/'):
@@ -303,6 +336,7 @@ class Main(object):
     UPLOAD_DESCRIPTION = 'Upload file(s).'
     DOWNLOAD_DESCRIPTION = 'Download file(s).'
     DELETE_DESCRIPTION = 'Delete file(s).'
+    MOVE_DESCRIPTION = 'Move file'
 
     def __init__(self):
         parser = argparse.ArgumentParser(description='Command line client for AWS s3.',
@@ -312,7 +346,8 @@ Available commands:
    ls/list      {Main.LIST_DESCRIPTION}
    put/upload   {Main.UPLOAD_DESCRIPTION}
    get/download {Main.DOWNLOAD_DESCRIPTION}
-   rm/delete    {Main.DELETE_DESCRIPTION}''')
+   rm/delete    {Main.DELETE_DESCRIPTION}
+   mv/move      {Main.MOVE_DESCRIPTION}''')
         parser.add_argument('--debug', choices = ['pdb', 'pudb'], default=None,
                             help='Start the main method in selected debugger')
         parser.add_argument('-b', '--bucket', type=str, required=True, help='s3 bucket name.')
@@ -341,6 +376,23 @@ Available commands:
         getattr(self, args.command)(subcommand_start + 1)
 
 
+    def move(self, subcommand_start):
+        parser = argparse.ArgumentParser()
+        parser.add_argument('-q', '--quiet', action='store_true', default=False,
+                            help='Less verbose output.')
+        parser.add_argument('file')
+        parser.add_argument('dest')
+        args = parser.parse_args(sys.argv[subcommand_start:])
+
+        if file_exists(self.bucket, self.client, args.file):
+            if not rename(self.bucket, self.client, args.file, args.dest, verbose=not args.quiet):
+                sys.exit(1)
+
+
+    def mv(self, subcommand_start):
+        self.move(subcommand_start)
+
+
     def list(self, subcommand_start):
         parser = argparse.ArgumentParser(description=Main.LIST_DESCRIPTION)
         parser.add_argument('-l', action='store_true', default=False, help='Use a long listing format.')
@@ -365,22 +417,23 @@ Available commands:
 
         for d in list_dirs:
             if len(list_dirs) > 1:
-                sys.stdout.write(f'{d}:\n')
+                if args.fileType != 'f':
+                    sys.stdout.write(f'{d}:\n')
 
             # list_f = list_versions if args.versions else list_files
             for chunk in list_files_depth(self.bucket, self.client, max_depth, d.rstrip('/') + '/'):
                 for file in chunk:
-                    if args.l:
-                        if 'IsDirectory' in file:
-                            time = '\t\t'
-                            if args.fileType == 'f':
-                                continue
-                        else:
-                            # convert last modified time to local timezone and format
-                            time = datetime.astimezone(file["LastModified"]).strftime("%b %d %Y %H:%m")
-                            if args.fileType == 'd':
-                                continue
+                    if 'IsDirectory' in file:
+                        time = '\t\t'
+                        if args.fileType == 'f':
+                            continue
+                    else:
+                        # convert last modified time to local timezone and format
+                        time = datetime.astimezone(file["LastModified"]).strftime("%b %d %Y %H:%m")
+                        if args.fileType == 'd':
+                            continue
 
+                    if args.l:
                         # convert file size to human readable format if necissary
                         size = format_size(file["Size"], args.si) if args.H else file["Size"]
 
@@ -409,7 +462,7 @@ Available commands:
 
         # with Pool(processes=min(args.threads, len(args.files)):
         for file in args.files:
-            remote_path = f'{args.directory.rstrip("/")}/{basename(file)}'
+            remote_path = f'{args.directory.rstrip("/")}/{os.path.basename(file)}'
             this_file_exists = file_exists(self.bucket, self.client, remote_path)
             if not args.quiet:
                 LOGGER.info(f'{"Overwriting" if this_file_exists else "Uploading"}: "{file}"')
@@ -418,7 +471,7 @@ Available commands:
                     LOGGER.info(f'"{remote_path}" already exists on bucket. Skipping...')
                 continue
 
-            upload_file(self.bucket, self.client, file, args.directory)
+            upload_file(self.bucket, self.client, file, args.directory, quiet=args.quiet)
             if not args.quiet:
                 LOGGER.info(f'Finished uploading "{file}"')
 
@@ -467,12 +520,12 @@ Available commands:
 
         dest = None
         if args.dest is None:
-            dest = basename(args.file)
-        elif not isdir(args.dest) or not isdir(dirname(args.dest)):
+            dest = os.path.basename(args.file)
+        elif not os.path.isdir(args.dest) or not os.path.isdir(os.path.dirname(args.dest)):
             LOGGER.error(f'Target file: "{args.dest}" could not be created!')
             sys.exit(1)
-        elif isdir(args.dest):
-            dest = f'{args.dest}/{basename(args.file)}'
+        elif os.path.isdir(args.dest):
+            dest = f'{args.dest}/{os.path.basename(args.file)}'
         else:
             dest = args.dest
 
