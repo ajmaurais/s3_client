@@ -130,7 +130,7 @@ def upload_file(bucket, s3_client, file_to_upload, location, quiet=False):
     if quiet:
         s3_client.upload_file(file_to_upload, bucket, _location, Config=config)
     else:
-        with tqdm(total=file_size, unit='B', unit_scale=True, desc='Downloading', leave=False) as pbar:
+        with tqdm(total=file_size, unit='B', unit_scale=True, desc='Uploading', leave=False) as pbar:
             s3_client.upload_file(file_to_upload, bucket, _location,
                                   Config=config, Callback=pbar.update)
 
