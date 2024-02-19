@@ -75,9 +75,9 @@ def s3_client_function(f):
     return try_block
 
 
-def get_s3_file_md5(bucket, s3_client, key, calculate=False, verbose=True):
+def get_s3_file_md5(bucket, s3_client, key, calculate=False):
     """
-    Calculate the MD5 hash of a file stored in an Amazon S3 bucket without downloading the whole file.
+    Calculate the MD5 hash of a file stored in an Amazon S3 bucket.
 
     Parameters
     ----------
@@ -90,15 +90,18 @@ def get_s3_file_md5(bucket, s3_client, key, calculate=False, verbose=True):
     calculate: bool
         If the ETag is not a md5 hash should the file be downloaded in pieces to calculate
         the hash manually? Default is False.
-    verbse: bool
-        Print verbose output? Default is True.
 
-    Returns:
-    - The MD5 hash of the file.
+    Returns
+    -------
+    str: The MD5 hash of the file.
     """
 
     # Get the object metadata, including the ETag which contains the MD5 hash
-    response = s3_client.head_object(Bucket=bucket, Key=key)
+    try:
+        response = s3_client.head_object(Bucket=bucket, Key=key)
+    except ClientError as e:
+        LOGGER.error(e)
+        return None
 
     # Extract the ETag (which should contain the MD5 hash)
     etag = response['ETag']
@@ -114,17 +117,21 @@ def get_s3_file_md5(bucket, s3_client, key, calculate=False, verbose=True):
     if not calculate:
         return None
 
-    # If the ETag is not a standard MD5 hash, compute the MD5 hash manually by downloading parts
+    # If the ETag is not a standard MD5 hash, compute the MD5 hash manually by downloading in parts
     md5 = hashlib.md5()
     size_bytes = response['ContentLength']
-    parts = size_bytes // (5 * 1024 * 1024) + 1  # Calculate number of parts (5MB each)
+    chunk_size_bytes = 10 * 1024 * 1024
+    parts = size_bytes // chunk_size_bytes + 1  # Calculate number of parts (5MB each)
 
     # Iterate over parts and calculate MD5 hash
-    for i in (tqdm(range(parts), desc='Calculating hash', leave=False) if verbose else range(parts)):
-        range_start = i * (5 * 1024 * 1024)
-        range_end = min((i + 1) * (5 * 1024 * 1024), size_bytes) - 1
-        response = s3_client.get_object(Bucket=bucket, Key=key, Range=f'bytes={range_start}-{range_end}')
-        md5.update(response['Body'].read())
+    with tqdm(total=size_bytes, unit='B', unit_scale=True, desc='Calculating hash', leave=False) as pbar:
+        for i in range(parts):
+            range_start = i * chunk_size_bytes
+            range_end = min((i + 1) * chunk_size_bytes, size_bytes) - 1
+            response = s3_client.get_object(Bucket=bucket, Key=key, Range=f'bytes={range_start}-{range_end}')
+            pbar.update(range_end - range_start)
+            md5.update(response['Body'].read())
+        pbar.close()
 
     return md5.hexdigest()
 
@@ -577,14 +584,14 @@ Available commands:
         args = parser.parse_args(sys.argv[subcommand_start:])
 
         for file in args.files:
-            md5_sum = get_s3_file_md5(self.bucket, self.client, file,
-                                      calculate=args.calculate, verbose=not args.quiet)
+            md5_sum = get_s3_file_md5(self.bucket, self.client, file, calculate=args.calculate)
             if md5_sum is None:
                 if args.calculate:
                     LOGGER.error(f"An unknown error occured getting the hash for '{file}'")
+                    sys.exit(1)
                 else:
                     LOGGER.error(f"'{file}' checksum is not a md5 hash! Use --calculate to calculate it manually.")
-                sys.exit(1)
+                continue
 
             sys.stdout.write(f'{md5_sum}\t{file}\n')
 
