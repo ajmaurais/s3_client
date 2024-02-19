@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 import logging
 from functools import wraps
+import hashlib
 # from multiprocessing import Pool
 
 from boto3 import client
@@ -18,7 +19,7 @@ logging.basicConfig(
 )
 LOGGER = logging.getLogger()
 
-SUBCOMMANDS = {'ls', 'list', 'put', 'upload', 'get', 'download', 'rm', 'delete', 'mv', 'move'}
+SUBCOMMANDS = {'ls', 'list', 'put', 'upload', 'get', 'download', 'rm', 'delete', 'mv', 'move', 'md5'}
 
 
 def _firstSubcommand(argv):
@@ -72,6 +73,60 @@ def s3_client_function(f):
             LOGGER.error(e)
             sys.exit(1)
     return try_block
+
+
+def get_s3_file_md5(bucket, s3_client, key, calculate=False, verbose=True):
+    """
+    Calculate the MD5 hash of a file stored in an Amazon S3 bucket without downloading the whole file.
+
+    Parameters
+    ----------
+    bucket: str
+        The name of the S3 bucket.
+    s3_client: boto3.client
+        Initialized client object
+    key: str
+        The key (path) of the file in the S3 bucket.
+    calculate: bool
+        If the ETag is not a md5 hash should the file be downloaded in pieces to calculate
+        the hash manually? Default is False.
+    verbse: bool
+        Print verbose output? Default is True.
+
+    Returns:
+    - The MD5 hash of the file.
+    """
+
+    # Get the object metadata, including the ETag which contains the MD5 hash
+    response = s3_client.head_object(Bucket=bucket, Key=key)
+
+    # Extract the ETag (which should contain the MD5 hash)
+    etag = response['ETag']
+
+    # ETag format might include quotes, remove them if present
+    if etag.startswith('"') and etag.endswith('"'):
+        etag = etag[1:-1]
+
+    # If the ETag is an MD5 hash (32 hexadecimal characters), return it
+    if len(etag) == 32:
+        return etag
+
+    if not calculate:
+        return None
+
+    # If the ETag is not a standard MD5 hash, compute the MD5 hash manually by downloading parts
+    md5 = hashlib.md5()
+    size_bytes = response['ContentLength']
+    parts = size_bytes // (5 * 1024 * 1024) + 1  # Calculate number of parts (5MB each)
+
+    # Iterate over parts and calculate MD5 hash
+    for i in (tqdm(range(parts), desc='Calculating hash', leave=False) if verbose else range(parts)):
+        range_start = i * (5 * 1024 * 1024)
+        range_end = min((i + 1) * (5 * 1024 * 1024), size_bytes) - 1
+        response = s3_client.get_object(Bucket=bucket, Key=key, Range=f'bytes={range_start}-{range_end}')
+        md5.update(response['Body'].read())
+
+    return md5.hexdigest()
 
 
 @s3_client_function
@@ -333,6 +388,7 @@ class Main(object):
     '''
 
     LIST_DESCRIPTION = 'List files in bucket or subdirectory.'
+    MD5_DESCRIPTION = 'Get or calculate file md5 hash.'
     UPLOAD_DESCRIPTION = 'Upload file(s).'
     DOWNLOAD_DESCRIPTION = 'Download file(s).'
     DELETE_DESCRIPTION = 'Delete file(s).'
@@ -344,6 +400,7 @@ class Main(object):
 
 Available commands:
    ls/list      {Main.LIST_DESCRIPTION}
+   md5          {Main.MD5_DESCRIPTION}
    put/upload   {Main.UPLOAD_DESCRIPTION}
    get/download {Main.DOWNLOAD_DESCRIPTION}
    rm/delete    {Main.DELETE_DESCRIPTION}
@@ -506,6 +563,30 @@ Available commands:
 
     def rm(self, subcommand_start):
         self.delete(subcommand_start)
+
+
+    def md5(self, subcommand_start):
+        parser = argparse.ArgumentParser(description=Main.MD5_DESCRIPTION)
+        parser.add_argument('-c', '--calculate', action='store_true', default=False,
+                            help='If the ETag is not a md5 hash downloaded the file in pieces '
+                                 'to calculate the hash manually.')
+        parser.add_argument('-q', '--quiet', action='store_true', default=False,
+                            help='Less verbose output.')
+
+        parser.add_argument('files', nargs='+', help='Remote file(s)')
+        args = parser.parse_args(sys.argv[subcommand_start:])
+
+        for file in args.files:
+            md5_sum = get_s3_file_md5(self.bucket, self.client, file,
+                                      calculate=args.calculate, verbose=not args.quiet)
+            if md5_sum is None:
+                if args.calculate:
+                    LOGGER.error(f"An unknown error occured getting the hash for '{file}'")
+                else:
+                    LOGGER.error(f"'{file}' checksum is not a md5 hash! Use --calculate to calculate it manually.")
+                sys.exit(1)
+
+            sys.stdout.write(f'{md5_sum}\t{file}\n')
 
 
     def download(self, subcommand_start):
